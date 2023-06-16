@@ -4,10 +4,10 @@ namespace App\Services;
 
 use App\Models\StockPrice;
 use Carbon\Carbon;
-use Exception;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Cache;
 use GuzzleHttp\Client;
+use Illuminate\Contracts\Cache\Repository as CacheRepository;
+use Illuminate\Support\Collection;
+use Exception;
 
 class AlphaVantageClient
 {
@@ -15,8 +15,9 @@ class AlphaVantageClient
 
     public function __construct(
         private string $apiKey,
+        private int $rateLimit,
         private Client $client,
-        private Cache $cache,
+        private CacheRepository $cache,
     ) {
     }
 
@@ -25,88 +26,63 @@ class AlphaVantageClient
         $this->checkRateLimit();
 
         $existingPrices = StockPrice::where('symbol', $symbol)->get();
+
+        $apiData = $this->getStockDataFromAPI($symbol);
+
         if ($existingPrices->isEmpty()) {
-            // No existing data, fetch from API
-            $timeSeries = $this->getStockDataFromAPI($symbol);
-
-            $this->saveStockData($symbol, $timeSeries);
-
-            return $timeSeries;
-        } else {
-            // Existing data found, fetch missing dates from API
-            $latestDate = Carbon::parse($existingPrices->max('date'))->toDateString();
-
-            $timeSeries = $this->getStockDataFromAPI($symbol, $latestDate);
-
-            if (!$timeSeries) {
-                return $existingPrices->sortBy('date');
+            if ($apiData->isEmpty()) {
+                return null;
             }
 
+            $this->saveStockData($symbol, $apiData);
+        }
+
+        // Existing data found, add missing dates from API
+        if ($apiData->isNotEmpty()) {
             // Store the stock data in the database for missing dates
-            $missingDates = array_diff(
-                $timeSeries->keys()->all(),
-                $existingPrices->pluck('date')->map(function ($date) {
-                    return Carbon::parse($date)->toDateString();
-                })->toArray()
+            $missingDates = $apiData->keys()->diff(
+                $existingPrices
+                    ->pluck('date')
+                    ->map(fn(string $date) => Carbon::parse($date)->toDateString())
             );
 
-            $stockPrices = $timeSeries
-                ->filter(function ($values, $date) use ($missingDates) {
-                    return in_array($date, $missingDates);
-                })
-                ->map(function (array $values, string $date) use ($symbol) {
-                    return [
-                        'symbol' => $symbol,
-                        'date' => Carbon::parse($date)->toDateString(),
-                        'open' => $values['1. open'],
-                        'high' => $values['2. high'],
-                        'low' => $values['3. low'],
-                        'close' => $values['4. close'],
-                        'volume' => $values['5. volume']
-                    ];
-                });
+            if ($missingDates->isNotEmpty()) {
+                $stockPrices = $apiData
+                    ->filter(fn(array $values, string $date) => $missingDates->contains($date));
 
-            $this->saveStockData($symbol, $stockPrices);
-
-            // Merge existing and newly inserted prices
-            return $existingPrices->concat($stockPrices);
+                $this->saveStockData($symbol, $stockPrices);
+            }
         }
+
+        return StockPrice::where('symbol', $symbol)->orderBy('date')->get();
     }
 
     private function checkRateLimit()
     {
         $lastRequestTime = $this->cache->get(self::CACHE_KEY);
-        $rateLimit = config('alphavantage.rate_limit');
 
         if ($lastRequestTime) {
             $elapsedTime = time() - $lastRequestTime;
-            $remainingTime = max(0, $rateLimit - $elapsedTime);
+            $remainingTime = max(0, $this->rateLimit - $elapsedTime);
             if ($remainingTime > 0) {
                 sleep($remainingTime);
             }
         }
 
         // Update the last request time in the cache
-        $this->cache->put(self::CACHE_KEY, time(), $rateLimit);
+        $this->cache->put(self::CACHE_KEY, time(), $this->rateLimit);
     }
 
-    private function getStockDataFromAPI(string $symbol, ?string $startDate = null): ?Collection
+    private function getStockDataFromAPI(string $symbol): ?Collection
     {
         $url = sprintf(
-            "%s?apikey=%s&function=%s&symbol=%s",
-            config('alphavantage.base_url'),
-            config('alphavantage.api_key'),
-            "TIME_SERIES_DAILY",
+            "%s?apikey=%s&function=%s&symbol=%s&outputsize=compact",
+            config('services.alphavantage.base_url'),
+            $this->apiKey,
+            "TIME_SERIES_DAILY_ADJUSTED",
             $symbol
         );
 
-        if ($startDate) {
-            $url .= sprintf(
-                "&startdate=%s&enddate=%s",
-                $startDate,
-                Carbon::today()->toDateString()
-            );
-        }
         try {
             // Make the API request
             $response = $this->client->get($url);
@@ -124,22 +100,19 @@ class AlphaVantageClient
         }
     }
 
-    private function saveStockData(string $symbol, Collection $timeSeries)
+    private function saveStockData(string $symbol, Collection $data)
     {
         // Store the stock data in the database
-        $stockPrices = collect($timeSeries)->map(function ($values, $date) use ($symbol) {
-            return [
+        $stockPrices = $data->map(
+            fn(array $values, string $date) => StockPrice::create([
                 'symbol' => $symbol,
-                'date' => Carbon::parse($date)->toDateString(),
+                'date' => Carbon::parse($date)->startOfDay(),
                 'open' => $values['1. open'],
                 'high' => $values['2. high'],
                 'low' => $values['3. low'],
                 'close' => $values['4. close'],
-                'volume' => $values['5. volume']
-            ];
-        });
-
-        // Insert new prices into the database
-        StockPrice::insert($stockPrices->toArray());
+                'volume' => $values['6. volume']
+            ])
+        );
     }
 }

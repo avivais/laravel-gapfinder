@@ -2,10 +2,19 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Model;
+use Jenssegers\Mongodb\Eloquent\Model;
 
 class StockPrice extends Model
 {
+    protected $casts = [
+        'date'   => 'datetime',
+        'open'   => 'float',
+        'high'   => 'float',
+        'low'    => 'float',
+        'close'  => 'float',
+        'volume' => 'int',
+    ];
+
     protected $fillable = [
         'symbol',
         'date',
@@ -13,6 +22,6 @@ class StockPrice extends Model
         'high',
         'low',
         'close',
-        'volume'
+        'volume',
     ];
 }
