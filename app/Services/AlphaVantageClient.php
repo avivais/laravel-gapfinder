@@ -29,12 +29,8 @@ class AlphaVantageClient
 
         $apiData = $this->getStockDataFromAPI($symbol);
 
-        if ($existingPrices->isEmpty()) {
-            if ($apiData->isEmpty()) {
-                return null;
-            }
-
-            $this->saveStockData($symbol, $apiData);
+        if ($existingPrices->isEmpty() && $apiData->isEmpty()) {
+            return null;
         }
 
         // Existing data found, add missing dates from API
@@ -54,7 +50,7 @@ class AlphaVantageClient
             }
         }
 
-        return StockPrice::where('symbol', $symbol)->orderBy('date')->get();
+        return StockPrice::where('symbol', $symbol)->get();
     }
 
     private function checkRateLimit()
@@ -76,7 +72,7 @@ class AlphaVantageClient
     private function getStockDataFromAPI(string $symbol): ?Collection
     {
         $url = sprintf(
-            "%s?apikey=%s&function=%s&symbol=%s&outputsize=compact",
+            "%s?apikey=%s&function=%s&symbol=%s&outputsize=full",
             config('services.alphavantage.base_url'),
             $this->apiKey,
             "TIME_SERIES_DAILY_ADJUSTED",
@@ -93,7 +89,7 @@ class AlphaVantageClient
             } elseif (isset($data['Time Series (Daily)'])) {
                 return collect($data['Time Series (Daily)']);
             } else {
-                return null;
+                throw new Exception("Invalid API response for {$symbol}");
             }
         } catch (Exception $e) {
             throw new Exception("Failed to retrieve stock data for $symbol. Error: {$e->getMessage()}");
@@ -103,15 +99,15 @@ class AlphaVantageClient
     private function saveStockData(string $symbol, Collection $data)
     {
         // Store the stock data in the database
-        $stockPrices = $data->map(
+        $data->each(
             fn(array $values, string $date) => StockPrice::create([
                 'symbol' => $symbol,
-                'date' => Carbon::parse($date)->startOfDay(),
-                'open' => $values['1. open'],
-                'high' => $values['2. high'],
-                'low' => $values['3. low'],
-                'close' => $values['4. close'],
-                'volume' => $values['6. volume']
+                'date'   => Carbon::parse($date)->startOfDay(),
+                'open'   => floatval($values['1. open']),
+                'high'   => floatval($values['2. high']),
+                'low'    => floatval($values['3. low']),
+                'close'  => floatval($values['4. close']),
+                'volume' => intval($values['6. volume']),
             ])
         );
     }
