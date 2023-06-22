@@ -13,12 +13,12 @@ class StockController extends Controller
 
     public function getStockData(Request $request, string $symbol)
     {
-        $data = $this->alphaVantageClient->getStockData($symbol);
+        $stockData = $this->alphaVantageClient->getStockData($symbol);
 
-        if ($data === null) {
-            return response()->json(['message' => "No stock data found for {$symbol}"], 404);
+        if ($stockData->isEmpty()) {
+            return redirect()->back()->with('error', 'No stock data available for the symbol.');
         }
 
-        return response()->json(['data' => $data]);
+        return response()->json(['data' => $stockData]);
     }
 }
