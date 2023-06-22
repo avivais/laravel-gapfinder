@@ -9,5 +9,4 @@ $router->get('/', function () {
     dump("Welcome to the StockController");
 });
 
-
 $router->get('/stocks/{symbol}', [StockController::class, 'getStockData']);
