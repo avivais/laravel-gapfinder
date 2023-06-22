@@ -19,6 +19,6 @@ class StockController extends Controller
             return redirect()->back()->with('error', 'No stock data available for the symbol.');
         }
 
-        return response()->json(['data' => $stockData]);
+        return view('stock', compact('stockData', 'symbol'));
     }
 }
