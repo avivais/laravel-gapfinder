@@ -50,7 +50,7 @@ class AlphaVantageClient
             }
         }
 
-        return StockPrice::where('symbol', $symbol)->get();
+        return StockPrice::where('symbol', $symbol)->orderByDesc('date')->get();
     }
 
     private function checkRateLimit()
