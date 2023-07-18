@@ -111,4 +111,90 @@ class AlphaVantageClient
             ])
         );
     }
+
+    private function getQuarterlyReportsFromAPI(string $symbol): ?Collection
+    {
+        $url = sprintf(
+            "%s?apikey=%s&function=%s&symbol=%s",
+            config('services.alphavantage.base_url'),
+            $this->apiKey,
+            "EARNINGS",
+            $symbol
+        );
+
+        try {
+            // Make the API request
+            $response = $this->client->get($url);
+            $data = json_decode($response->getBody(), true);
+
+            if (isset($data['Error Message'])) {
+                throw new Exception("Failed to retrieve annual reports for {$symbol}. Error: {$data['Error Message']}");
+            } elseif (isset($data['quarterlyEarnings'])) {
+                return collect($data['quarterlyEarnings']);
+            } else {
+                throw new Exception("Invalid API response for {$symbol}");
+            }
+        } catch (Exception $e) {
+            throw new Exception("Failed to retrieve annual reports for $symbol. Error: {$e->getMessage()}");
+        }
+    }
+
+    private function findSignificantGaps(string $symbol, float $threshold): Collection
+    {
+        $prices = StockPrice::where('symbol', $symbol)->orderBy('date')->get();
+
+        return $prices
+            ->zip($prices->skip(1))->filter(function ($pair) use ($threshold) {
+                [$previousPrice, $currentPrice] = $pair;
+
+                // When there are no more pairs, $currentPrice will be null
+                if (!$currentPrice) {
+                    return false;
+                }
+
+                return (($currentPrice->open - $previousPrice->close) / $previousPrice->close) > $threshold;
+            })
+            ->map(function ($pair) {
+                [$previousPrice, $currentPrice] = $pair;
+
+                return [
+                    'date'       => $currentPrice->date,
+                    'open'       => $currentPrice->open,
+                    'prev_close' => $previousPrice->close,
+                    'change'     => ($currentPrice->open - $previousPrice->close) / $previousPrice->close
+                ];
+            });
+    }
+
+    public function findPowerEarningsGaps(string $symbol, float $threshold): Collection
+    {
+        $gaps = $this->findSignificantGaps($symbol, $threshold);
+        $reports = $this->getQuarterlyReportsFromAPI($symbol);
+
+        $reportDates = $reports->pluck('reportedDate')->map(function ($date) {
+            return Carbon::parse($date);
+        });
+
+        return $gaps
+            ->map(function ($gap) use ($reportDates) {
+                $gapDate = $gap['date'];
+
+                $reportDateOneDayBefore = $reportDates->first(function ($reportDate) use ($gapDate) {
+                    return $reportDate->copy()->addDay()->equalTo($gapDate);
+                });
+
+                $reportDateTwoDaysBefore = $reportDates->first(function ($reportDate) use ($gapDate) {
+                    return $reportDate->copy()->addDays(2)->equalTo($gapDate);
+                });
+
+                if ($reportDateOneDayBefore || $reportDateTwoDaysBefore) {
+                    $gap['reportDate'] = $reportDateOneDayBefore ?: $reportDateTwoDaysBefore;
+                }
+
+                return $gap;
+            })
+            ->filter(function ($gap) {
+                return isset($gap['reportDate']);
+            });
+    }
 }
