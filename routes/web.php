@@ -10,3 +10,5 @@ $router->get('/', function () {
 });
 
 $router->get('/stocks/{symbol}', [StockController::class, 'getStockData']);
+
+$router->get('/stocks/{symbol}/pegs/{threshold}', [StockController::class, 'getStockPegs']);

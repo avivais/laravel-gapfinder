@@ -85,14 +85,14 @@ class AlphaVantageClient
             $data = json_decode($response->getBody(), true);
 
             if (isset($data['Error Message'])) {
-                throw new Exception("Failed to retrieve stock data for {$symbol}. Error: {$data['Error Message']}");
+                throw new Exception("Failed to retrieve stock data for {$symbol}: {$data['Error Message']}");
             } elseif (isset($data['Time Series (Daily)'])) {
                 return collect($data['Time Series (Daily)']);
             } else {
                 throw new Exception("Invalid API response for {$symbol}");
             }
         } catch (Exception $e) {
-            throw new Exception("Failed to retrieve stock data for $symbol. Error: {$e->getMessage()}");
+            throw new Exception($e->getMessage());
         }
     }
 
@@ -128,14 +128,14 @@ class AlphaVantageClient
             $data = json_decode($response->getBody(), true);
 
             if (isset($data['Error Message'])) {
-                throw new Exception("Failed to retrieve annual reports for {$symbol}. Error: {$data['Error Message']}");
+                throw new Exception("Failed to retrieve annual reports for {$symbol}: {$data['Error Message']}");
             } elseif (isset($data['quarterlyEarnings'])) {
                 return collect($data['quarterlyEarnings']);
             } else {
                 throw new Exception("Invalid API response for {$symbol}");
             }
         } catch (Exception $e) {
-            throw new Exception("Failed to retrieve annual reports for $symbol. Error: {$e->getMessage()}");
+            throw new Exception($e->getMessage());
         }
     }
 
@@ -152,16 +152,14 @@ class AlphaVantageClient
                     return false;
                 }
 
-                return (($currentPrice->open - $previousPrice->close) / $previousPrice->close) > $threshold;
+                return (($currentPrice->open - $previousPrice->close) / $previousPrice->close) >= $threshold;
             })
             ->map(function ($pair) {
                 [$previousPrice, $currentPrice] = $pair;
 
                 return [
-                    'date'       => $currentPrice->date,
-                    'open'       => $currentPrice->open,
-                    'prev_close' => $previousPrice->close,
-                    'change'     => ($currentPrice->open - $previousPrice->close) / $previousPrice->close
+                    'previous' => $previousPrice,
+                    'current'  => $currentPrice,
                 ];
             });
     }
@@ -176,8 +174,8 @@ class AlphaVantageClient
         });
 
         return $gaps
-            ->map(function ($gap) use ($reportDates) {
-                $gapDate = $gap['date'];
+            ->map(function ($gap) use ($reportDates, $symbol) {
+                $gapDate = $gap['current']->date;
 
                 $reportDateOneDayBefore = $reportDates->first(function ($reportDate) use ($gapDate) {
                     return $reportDate->copy()->addDay()->equalTo($gapDate);
@@ -189,6 +187,13 @@ class AlphaVantageClient
 
                 if ($reportDateOneDayBefore || $reportDateTwoDaysBefore) {
                     $gap['reportDate'] = $reportDateOneDayBefore ?: $reportDateTwoDaysBefore;
+
+                    if ($reportDateTwoDaysBefore) {
+                        $gap['twodaysago'] = StockPrice::where('symbol', $symbol)
+                            ->where('date', $reportDateTwoDaysBefore)
+                            ->get()
+                            ->first();
+                    }
                 }
 
                 return $gap;
